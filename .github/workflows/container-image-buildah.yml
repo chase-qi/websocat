@@ -47,18 +47,39 @@ permissions:
 
 jobs:
   buildah:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-latest
+            tag_suffix: ""
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+            tag_suffix: "-arm64"
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Sanitize Platforms
         id: platforms
         run: |
           platforms="${{ inputs.platforms == '' && 'linux/amd64,linux/arm64' || inputs.platforms }}"
-          archs="$( sed -e 's#linux/##g' <<< $platforms )"
+          if [ "${{ matrix.architecture }}" = "arm64" ]; then
+            platforms="linux/arm64"
+          else
+            platforms="$( sed -e 's#linux/arm64,##g' -e 's#,linux/arm64##g' -e 's#linux/arm64##g' <<< $platforms)"
+            archs="$( sed -e 's#linux/##g' <<< $platforms )"
+            echo "archs=$archs" >> $GITHUB_OUTPUT
+          fi
           echo "platforms=$platforms" >> $GITHUB_OUTPUT
-          echo "archs=$archs" >> $GITHUB_OUTPUT
+
+      - name: Install Podman on Ubuntu 24.04-arm
+        if: ${{ matrix.architecture == 'arm64' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
 
       # Allow multi-target builds
       - name: Set up QEMU
+        if: matrix.architecture != 'arm64'
         uses: docker/setup-qemu-action@v3
         with:
           platforms: ${{ steps.platforms.outputs.archs }}
@@ -77,7 +98,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.tag_suffix }}
           tags: |
             type=schedule
             type=raw,value=latest,enable=${{ github.ref_name == 'master' }}
